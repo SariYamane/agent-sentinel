@@ -1,4 +1,4 @@
-FROM docker.io/ubuntu:20.04
+FROM docker.io/ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DEBIAN_PRIORITY=high
@@ -6,6 +6,9 @@ ENV DEBIAN_PRIORITY=high
 RUN sed -i "s/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g" /etc/apt/sources.list
 RUN apt update && apt upgrade -y
 RUN apt install -y --no-install-recommends \
+    ca-certificates \
+    gnupg \
+    dirmngr \
     software-properties-common \
     mysql-server \
     redis-server \

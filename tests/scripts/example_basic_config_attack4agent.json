@@ -8,5 +8,5 @@
     "type": "attack4agent"
   },
   "defenses": [],
-  "output_dir": "."
+  "output_dir": "../output"
 }

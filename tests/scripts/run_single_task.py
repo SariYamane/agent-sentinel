@@ -13,7 +13,7 @@ import docker
 import docker.errors
 
 
-HOST_MOUNT_DIR = "~/.anthropic"
+HOST_MOUNT_DIR = "/home/arcana/.anthropic"
 CON_MOUNT_DIR = "/home/computeruse/.anthropic"
 AGENT_IMAGE = "computer-use-demo-test"
 AGENT_USER = "computeruse"
@@ -22,7 +22,7 @@ AGENT_TEST_FILE = "/home/computeruse/scripts/test_config.json"
 
 # change it to absolute path
 TIMEOUT_TABLE = {
-    "../dataset/attacks/attack4agent2/attack4agent2.json" : 300
+    "/home/arcana/experiment/agent-sentinel/tests/dataset/attacks/attack4agent2/attack4agent2.json" : 300
 }
 
 def copy_from_host_to_container(con, host_path, con_path):
@@ -209,7 +209,9 @@ def preload_running_env(setup):
 
 def start_computer_use_demo_env(params):
     env = [
-        "COMPUTER_MONITOR_SOCK=/home/computeruse/.anthropic/computer-monitor.sock"
+        "COMPUTER_MONITOR_SOCK=/home/computeruse/.anthropic/computer-monitor.sock",
+        f"OPENROUTER_API_KEY={os.environ['OPENROUTER_API_KEY']}",
+        f"OPENROUTER_BASE_URL={os.environ['OPENROUTER_BASE_URL']}",
     ]
 
     if "env" in params:
@@ -252,8 +254,8 @@ def setup_sandbox(computer_use_con, log_file, model):
 
     proc = subprocess.Popen(
         args=args,
-        stderr=subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        # stderr=subprocess.PIPE,
+        # stdout=subprocess.PIPE,
         bufsize=0,
     )
 

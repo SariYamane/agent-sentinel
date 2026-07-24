@@ -7,7 +7,7 @@
   "attack": {
     "type": "bad_tool_result"
   },
-  "output_dir": ".",
+  "output_dir": "../output",
   "mock_servers": [
     "computer-use-demo-test-attack-server"
   ]

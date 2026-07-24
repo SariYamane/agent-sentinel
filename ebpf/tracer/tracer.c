@@ -110,7 +110,7 @@ int BPF_PROG(task_kill, struct task_struct *p, struct kernel_siginfo *info,
         return 0;
     } else {
         bpf_ringbuf_submit(event, 0);
-        return 1;
+        return -1;
     }
 }
 
@@ -843,7 +843,14 @@ int kprobe_security_file_open(struct pt_regs *ctx) {
     u32 inode = get_inode_nr_from_file(file);
     u64 ctime = get_ctime_nanosec_from_file(file);
 
-    if (query_file_access(inode, ctime)) {
+    perm = map_file_to_perms(file);
+
+    // Only cache-skip read-only opens. Write opens must always be checked:
+    // ctime granularity can be too coarse (e.g. Linux multigrain timestamps)
+    // to distinguish two rapid successive writes to the same file, so
+    // caching writes by (inode, ctime) can silently drop the stop-policy
+    // check and event submission for a write that should be enforced.
+    if (!(perm & (MAY_WRITE | MAY_APPEND)) && query_file_access(inode, ctime)) {
         return 0;
     }
 
@@ -860,7 +867,6 @@ int kprobe_security_file_open(struct pt_regs *ctx) {
         return 0;
     }
 
-    perm = map_file_to_perms(file);
     ns_tgid = get_task_tgid_nr_ns(current_task);
 
     event = bpf_ringbuf_reserve(&file_events, sizeof(*event), 0);

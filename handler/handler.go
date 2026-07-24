@@ -12,6 +12,7 @@ import (
 	"agent-sentinel/audit"
 	"agent-sentinel/helper"
 	"agent-sentinel/tracer"
+	"sync"
 	"time"
 )
 
@@ -37,7 +38,13 @@ type Handler struct {
 	audit                *audit.Audit
 	enableAudit          bool
 	// FIXME: how to handle stop, stop, stop....
-	inProcessing map[int]bool
+	inProcessingMu sync.Mutex
+	inProcessing   map[int]bool
+
+	// knownPids tracks pids that are currently traced (from fork/exec to
+	// exit), so the orphan-stop watchdog knows which pids to check.
+	knownPidsMu sync.Mutex
+	knownPids   map[int]struct{}
 }
 
 func NewHandler(pidNS int, auditor *audit.Audit) (*Handler, error) {
@@ -47,6 +54,7 @@ func NewHandler(pidNS int, auditor *audit.Audit) (*Handler, error) {
 		audit:        auditor,
 		enableAudit:  true,
 		inProcessing: make(map[int]bool),
+		knownPids:    make(map[int]struct{}),
 	}
 
 	// FIXME: audit may not required
@@ -214,6 +222,7 @@ func (h *Handler) NewConnectHandler() api.ComputerMonitorMessageCallback {
 
 		h.hostRootPid = agentProcessInfo.HostPid
 		h.nsRootPid = agentProcessInfo.NSPid
+		h.trackKnownPid(h.hostRootPid)
 
 		err = h.audit.SetTraceInfo(h.tracer, &agentProcessInfo)
 		if err != nil {
@@ -363,13 +372,99 @@ func (h *Handler) NewGetLastTraceRecordHandler() api.ComputerMonitorMessageCallb
 }
 
 func (h *Handler) TakeDecisionByAudit(pid int, event interface{}, traceRecord map[uint32]*audit.ProcessEventTable, toolUseCtx []*audit.ToolUseMessage, newToolUseMsg []*audit.ToolUseMessage) {
+	h.markInProcessing(pid)
+	defer h.clearInProcessing(pid)
+
 	if h.audit.Query(pid, event, traceRecord, toolUseCtx, newToolUseMsg) == audit.AUDIT_OP_RESUME_PROCESS {
-		if err := resumeProcess(pid); err != nil {
+		if err := resumeProcessReliably(pid); err != nil {
 			log.Error().Err(err).Msg("handler: resume process failed")
 		}
 	} else {
 		if err := terminateProcess(pid); err != nil {
 			log.Error().Err(err).Msg("handler: terminate process failed")
+		}
+	}
+}
+
+func (h *Handler) markInProcessing(pid int) {
+	h.inProcessingMu.Lock()
+	h.inProcessing[pid] = true
+	h.inProcessingMu.Unlock()
+}
+
+func (h *Handler) clearInProcessing(pid int) {
+	h.inProcessingMu.Lock()
+	delete(h.inProcessing, pid)
+	h.inProcessingMu.Unlock()
+}
+
+func (h *Handler) isInProcessing(pid int) bool {
+	h.inProcessingMu.Lock()
+	defer h.inProcessingMu.Unlock()
+	return h.inProcessing[pid]
+}
+
+func (h *Handler) trackKnownPid(pid int) {
+	h.knownPidsMu.Lock()
+	h.knownPids[pid] = struct{}{}
+	h.knownPidsMu.Unlock()
+}
+
+func (h *Handler) untrackKnownPid(pid int) {
+	h.knownPidsMu.Lock()
+	delete(h.knownPids, pid)
+	h.knownPidsMu.Unlock()
+}
+
+func (h *Handler) knownPidsSnapshot() []int {
+	h.knownPidsMu.Lock()
+	defer h.knownPidsMu.Unlock()
+
+	pids := make([]int, 0, len(h.knownPids))
+	for pid := range h.knownPids {
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// startOrphanStopWatchdog periodically looks for traced processes that are
+// stuck in the kernel's stopped state (T) with no in-flight audit decision
+// for them. This can happen when an eBPF probe's bpf_send_signal(SIGSTOP)
+// is never followed by a matching ring buffer event reaching this process
+// (or is followed by one whose resume race is lost, see
+// resumeProcessReliably) — in either case, nothing is ever going to send a
+// SIGCONT for that specific process again, so it would otherwise be stuck
+// forever. Processes with an audit currently in flight are skipped so we
+// never resume a process before its security decision has actually been
+// made.
+func (h *Handler) startOrphanStopWatchdog() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			h.sweepOrphanedStops()
+		case <-h.ctx.Done():
+			return
+		}
+	}
+}
+
+func (h *Handler) sweepOrphanedStops() {
+	for _, pid := range h.knownPidsSnapshot() {
+		if h.isInProcessing(pid) {
+			continue
+		}
+
+		state, err := readProcessState(pid)
+		if err != nil || state != "T" {
+			continue
+		}
+
+		log.Warn().Msgf("handler: watchdog found orphaned stopped process %d with no in-flight audit, resuming", pid)
+		if err := resumeProcess(pid); err != nil {
+			log.Error().Err(err).Msgf("handler: watchdog failed to resume process %d", pid)
 		}
 	}
 }
@@ -391,6 +486,8 @@ func (h *Handler) handlePassiveTracing() {
 				// nodify the audit
 				h.audit.NotifyProcessExit(e)
 
+				h.untrackKnownPid(int(e.ChildTgid))
+
 				// notice parent process that child process exited
 				if procTable, ok := h.passiveTracing.record[e.ParentTgid]; ok {
 					procTable.DecAliveChildProcess()
@@ -409,6 +506,8 @@ func (h *Handler) handlePassiveTracing() {
 				procTable := audit.NewProcessEventTable()
 				h.passiveTracing.record[e.ChildTgid] = procTable
 				procTable.SetExecEvent(e)
+
+				h.trackKnownPid(int(e.ChildTgid))
 
 				if parent, ok := h.passiveTracing.record[e.ParentTgid]; ok {
 					parent.IncAliveChildProcess()
@@ -444,7 +543,7 @@ func (h *Handler) handlePassiveTracing() {
 			if h.audit.FilterNetEvent(e) {
 				if e.Flag&tracer.EventFlagProcessStopped == tracer.EventFlagProcessStopped {
 					log.Debug().Msgf("handler: resume process from the filter")
-					_ = resumeProcess(int(e.Tgid))
+					_ = resumeProcessReliably(int(e.Tgid))
 				}
 				return
 			}
@@ -468,7 +567,7 @@ func (h *Handler) handlePassiveTracing() {
 			if h.audit.FilterFileEvent(e) {
 				if e.Flag&tracer.EventFlagProcessStopped == tracer.EventFlagProcessStopped {
 					log.Debug().Msgf("handler: resume process from the filter")
-					_ = resumeProcess(int(e.Tgid))
+					_ = resumeProcessReliably(int(e.Tgid))
 				}
 				return
 			}
@@ -573,6 +672,7 @@ func (h *Handler) NewStartPassiveTracingHandler() api.ComputerMonitorMessageCall
 		}
 
 		go h.handlePassiveTracing()
+		go h.startOrphanStopWatchdog()
 
 		return api.CreateEmptyComputerMonitorMessageResponse()
 	}

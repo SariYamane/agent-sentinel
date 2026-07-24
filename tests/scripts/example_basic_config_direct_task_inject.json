@@ -10,5 +10,5 @@
     }},
   "defenses": [],  
   "enable_console_log": true,
-  "output_dir": "."
+  "output_dir": "../output"
 }

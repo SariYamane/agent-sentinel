@@ -7,5 +7,5 @@
   "attack": {
     "type": "third_party_app"
   },
-  "output_dir": "."
+  "output_dir": "../output"
 }

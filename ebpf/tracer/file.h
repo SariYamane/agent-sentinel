@@ -459,20 +459,20 @@ static inline u64 get_ctime_nanosec_from_inode(struct inode *inode)
     struct timespec64 ts = {};
 
     // // Kernel >= 6.11
-    // if (bpf_core_field_exists(inode->i_ctime_sec) && bpf_core_field_exists(inode->i_ctime_nsec)) {
-    //     ts.tv_sec = BPF_CORE_READ(inode, i_ctime_sec);
-    //     ts.tv_nsec = BPF_CORE_READ(inode, i_ctime_nsec);
-    // }
+    if (bpf_core_field_exists(inode->i_ctime_sec) && bpf_core_field_exists(inode->i_ctime_nsec)) {
+        ts.tv_sec = BPF_CORE_READ(inode, i_ctime_sec);
+        ts.tv_nsec = BPF_CORE_READ(inode, i_ctime_nsec);
+    }
     // // Kernel 6.6 - 6.10
     // else if (bpf_core_field_exists(((struct inode___older_v611 *) inode)->__i_ctime)) {
     //     struct inode___older_v611 *old_inode_v611 = (void *) inode;
     //     ts = BPF_CORE_READ(old_inode_v611, __i_ctime);
     // }
     // // Kernel < 6.6
-    // else {
+    else {
         struct inode___older_v66 *old_inode_v66 = (void *) inode;
         ts = BPF_CORE_READ(old_inode_v66, i_ctime);
-    // }
+    }
 
     return get_time_nanosec_timespec(&ts);
 }

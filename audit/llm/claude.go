@@ -24,8 +24,13 @@ func NewClaudeClient(model string, systemPrompt string) (*ClaudeClient, error) {
 		return nil, fmt.Errorf("audit: API key is missing")
 	}
 
+	baseURL := os.Getenv("OPENROUTER_BASE_URL")
+	if baseURL == "" {
+		return nil, fmt.Errorf("audit: OpenRouter base URL is missing")
+	}
+
 	cc := &ClaudeClient{
-		Client:         anthropic.NewClient(option.WithAPIKey(apikey)),
+		Client:         anthropic.NewClient(option.WithAuthToken(apikey), option.WithBaseURL(baseURL)),
 		MessageHistory: []anthropic.BetaTextBlockParam{},
 		SystemPrompt:   systemPrompt,
 		Model:          model,

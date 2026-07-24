@@ -1,12 +1,12 @@
 package llm
 
 import (
-	"os"
 	"context"
+	"fmt"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/rs/zerolog/log"
-	"fmt"
+	"os"
 )
 
 type OpenAIClient struct {
@@ -18,15 +18,22 @@ type OpenAIClient struct {
 }
 
 func NewOpenAIClient(model string, systemPrompt string) (*OpenAIClient, error) {
-	apikey := os.Getenv("OPENAI_API_KEY")
+	apikey := os.Getenv("OPENROUTER_API_KEY")
 	if apikey == "" {
 		log.Error().Msg("openai: API key is missing")
 		return nil, fmt.Errorf("audit: API key is missing")
 	}
 
+	baseURL := os.Getenv("OPENROUTER_BASE_URL")
+	if baseURL == "" {
+		log.Error().Msg("openrouter: base URL is missing")
+		return nil, fmt.Errorf("audit: OpenRouter base URL is missing")
+	}
+
 	oc := &OpenAIClient{
 		Client: openai.NewClient(
 			option.WithAPIKey(apikey),
+			option.WithBaseURL(baseURL),
 		),
 		MessageHistory: []openai.ChatCompletionMessageParamUnion{},
 		SystemPrompt:   systemPrompt,

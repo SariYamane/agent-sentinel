@@ -10,6 +10,7 @@ import (
 	"agent-sentinel/audit/filters"
 	"agent-sentinel/audit/llm"
 	"agent-sentinel/tracer"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -308,6 +309,33 @@ func (audit *Audit) Query(pid int, sensitiveOp interface{}, traceRecord map[uint
 	return answer
 }
 
+// stripMarkdownCodeFence removes a surrounding ```json ... ``` (or plain
+// ``` ... ```) code fence from an LLM response, if present. Despite being
+// asked for raw JSON, some models still wrap their answer in a markdown
+// code block, which would otherwise make json.Unmarshal fail and the
+// auditor silently fail open (see queryWithLLM's caller) even though the
+// model's actual verdict was successfully generated.
+func stripMarkdownCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+
+	// drop an optional language identifier on the first line (e.g. "json")
+	if nl := strings.IndexByte(s, '\n'); nl != -1 {
+		firstLine := strings.TrimSpace(s[:nl])
+		if firstLine != "" && !strings.ContainsAny(firstLine, "{[\"") {
+			s = strings.TrimSpace(s[nl+1:])
+		}
+	}
+
+	return s
+}
+
 func (audit *Audit) queryWithLLM(ctx context.Context, sensitiveOp string, systemTrace string, taskDescription string) (*AuditorAnswer, error) {
 	buf := new(bytes.Buffer)
 
@@ -330,6 +358,8 @@ func (audit *Audit) queryWithLLM(ctx context.Context, sensitiveOp string, system
 	}
 
 	// log.Debug().Msgf("audit: recv message from client: %s", rawJson)
+
+	rawJson = stripMarkdownCodeFence(rawJson)
 
 	var answer AuditorAnswer
 	err = json.Unmarshal([]byte(rawJson), &answer)

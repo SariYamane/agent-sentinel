@@ -1,17 +1,17 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"flag"
-	"fmt"
-	"github.com/rs/zerolog/log"
 	"agent-sentinel/api"
 	"agent-sentinel/audit"
 	"agent-sentinel/handler"
 	"agent-sentinel/helper"
 	moniterlog "agent-sentinel/log"
 	"agent-sentinel/tracer"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"github.com/rs/zerolog/log"
 	"os"
 	"os/signal"
 	"time"
@@ -158,7 +158,8 @@ func newComputerUseMonitor() (*computerUseMonitor, error) {
 	//	return nil, fmt.Errorf("target X11 server addr is required")
 	//}
 
-	cgroupV2Path, err := helper.FindCgroupV2Path(conID)
+	// cgroupV2Path, err := helper.FindCgroupV2Path(conID)
+	cgroupV2Path, err := helper.FindCgroupV2Path(cpid)
 	if err != nil {
 		log.Error().Err(err).Msg("find cgroup path failed")
 		return nil, err

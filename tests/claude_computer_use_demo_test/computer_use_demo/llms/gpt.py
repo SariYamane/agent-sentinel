@@ -3,6 +3,7 @@ import httpx
 from typing import Any, cast
 from collections.abc import Callable
 import json
+import os
 
 from openai import (
     OpenAI,
@@ -205,7 +206,9 @@ class GPT(BaseLLM):
             "content" : system_prompt,
         }
         self.client = OpenAI(
-            api_key=api_key,
+            # api_key=api_key,
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            base_url=os.environ["OPENROUTER_BASE_URL"],
         )
         self.api_response_callback = api_response_callback
 
