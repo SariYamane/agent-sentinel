@@ -81,7 +81,10 @@ struct {
 } mnt_ns_id_list SEC(".maps");
 
 static inline u32 get_task_mnt_ns_id(struct task_struct *task) {
-  return BPF_CORE_READ(task, nsproxy, mnt_ns, ns).inum;
+  struct mnt_namespace *mnt_ns = BPF_CORE_READ(task, nsproxy, mnt_ns);
+  u32 inum = 0;
+  bpf_core_read(&inum, sizeof(inum), &mnt_ns->ns.inum);
+  return inum;
 }
 
 static __always_inline int process_in_scope() {

@@ -188,6 +188,8 @@ def load_config(config):
         config["output_dir"] = tasks_output_dir
     else:
         tasks_output_dir = config["output_dir"]
+        if not os.path.exists(tasks_output_dir):
+            os.makedirs(tasks_output_dir)
 
     print(f"[*] output dir is `{tasks_output_dir}`")
 
