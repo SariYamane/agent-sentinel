@@ -66,20 +66,29 @@ sudo cat /etc/sudoers
 
 ### Set API Key
 
-Add related envrionmenet variables.
+We now call models through [OpenRouter](https://openrouter.ai/) instead of the vendor APIs directly.
+
+Create a `.env` file in the project root (already covered by `.gitignore`, do not commit it):
 ```bash
-# for claude models
-export ANTHROPIC_API_KEY=xxx
-# for openai models
-export OPENAI_API_KEY=xxx
+export OPENROUTER_API_KEY=xxx
+export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
-Modify these envrionmenet variables in `tests/scripts/start_sandbox.sh` and `tests/scripts/start_tool_use_guard.sh`.
+`tests/scripts/start_sandbox.sh` sources this `.env` automatically. These two variables are used by:
+- AgentSentinel's own audit/judge LLM calls (`audit/llm/openai.go`, `audit/filters/net_filter.go` for excluding OpenRouter traffic from network auditing).
+- The computer-use-demo container when the attacked agent itself uses a GPT model (`tests/claude_computer_use_demo_test/computer_use_demo/llms/gpt.py` forces `OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL`, ignoring any `api_key` set in its config file). `run_single_task.py` passes these two env vars into the container.
 
+If the judge/audit model is a Claude model (`audit/llm/claude.go`), it still reads `ANTHROPIC_API_KEY` from the environment (used as the bearer token, but requests are routed through `OPENROUTER_BASE_URL`), so also add it to `.env`:
+```bash
+export ANTHROPIC_API_KEY=xxx
+```
 
-Modify `api_key` in following basic config files:
+For the **attacked agent** running inside the computer-use-demo container, when it is a Claude model, `tests/claude_computer_use_demo_test/computer_use_demo/llms/claude.py` talks to the real Anthropic API directly using the `api_key` field from its config file (not OpenRouter). Set a real Anthropic key there:
 
 - `tests/scripts/claude35_basic_config.json`
 - `tests/scripts/claude37_basic_config.json`
+
+The `api_key` field in the GPT config files is unused (overridden by `OPENROUTER_API_KEY`), but keep them as placeholders:
+
 - `tests/scripts/gpt_4_turbo_basic_config.json`
 - `tests/scripts/gpt_4o_basic_config.json`
 
