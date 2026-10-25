@@ -2,10 +2,10 @@
 
 Our test environment configuration as follows.
 
-- Ubuntu 20.04
+- Ubuntu 24.04
 - Docker version 27.2.1
 - LLVM-12 (required by ebpf-go)
-- libbpf-dev 1:0.5.0-1~ubuntu20.04.1
+- libbpf-dev (ubuntu24.04)
 - Enable BPF-LSM. Check `cat /sys/kernel/security/lsm` to ensure it is enabled.
 - Golang: go1.23.3 linux/amd64
 - Python 3.11
