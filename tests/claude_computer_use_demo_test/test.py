@@ -6,8 +6,6 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-import httpx
-
 from computer_use_demo.agent import (
     Agent,
 )
@@ -90,7 +88,7 @@ def load_config(config_file):
             log_json_str("api_request", req.read().decode(), enable_console_log, output_file_log)
             if e:
                 log_json_str("api_error", str(e), enable_console_log, output_file_log)
-            if isinstance(res, httpx.Response):
+            if hasattr(res, "text"):
                 log_json_str("api_response", res.text, enable_console_log, output_file_log)
             else:
                 log_json_str("api_response", res, enable_console_log, output_file_log)

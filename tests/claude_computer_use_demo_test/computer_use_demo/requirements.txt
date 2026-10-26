@@ -4,3 +4,4 @@ boto3>=1.28.57
 google-auth<3,>=2
 openai >= 1.69.0
 requests == 2.32.4
+httpx
