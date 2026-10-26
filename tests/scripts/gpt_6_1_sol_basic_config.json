@@ -1,0 +1,7 @@
+{
+  "model": "openai/gpt-6.1-sol",
+  "api_key": "xxx",
+  "messages": [],
+  "n_images": 3,
+  "max_requests": 30
+}
