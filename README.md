@@ -141,3 +141,19 @@ python run_all_tasks.py -c claude35_basic_config.json -t all_attack_task.json -a
 # ...
 ```
 More experiment commands can be seen in `run_all_tasks.py`.
+
+## Adding a New Model
+
+Each `*_basic_config.json`'s `"model"` field (see [Set API Key](#set-api-key)) drives both the attacked agent and AgentSentinel's judge/audit LLM — see `run_single_task.py:79` (`load_basic_config`) and how that single value is reused at `run_single_task.py:133` (sent to the computer-use-demo container) and `run_single_task.py:377` (passed to `start_sandbox.sh -model`). Supported model names are not free-form, though — the following hardcoded whitelists must all be updated to add a new model:
+
+1. `audit/types.go` — add a new `AuditBaseLLM*` constant for the model name.
+2. `main.go` — add the new constant to the CLI validation check (`-model` flag).
+3. `audit/audit.go`, `audit/audit_without_trace.go`, `audit/tool_use_ctx_analyzer.go` — add the new constant as a `case` in each LLM-selection `switch` (Claude vs. OpenAI client), e.g. `fallthrough` into the existing `AuditBaseLLMGPT4o` case for an OpenAI-compatible model.
+4. `tests/claude_computer_use_demo_test/computer_use_demo/agent.py` — add the model name to the `elif` condition that picks `ClaudeLLM` vs. `GPT` for the attacked agent; otherwise it raises `Unknown LLM type`.
+5. Rebuild the computer-use-demo Docker image after editing `agent.py`, since that file is baked into the image (see [Build Computer-Use Agent](#build-computer-use-agent)):
+   ```bash
+   cd tests/claude_computer_use_demo_test/
+   docker build . -t computer-use-demo-test
+   ```
+
+Finally, set `"model"` in the relevant `*_basic_config.json` (or create a new one) to the new model name.

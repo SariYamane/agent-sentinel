@@ -429,6 +429,7 @@ const (
 	AuditBaseLLMCladue37   = "claude-3-7-sonnet-20250219"
 	AuditBaseLLMGPT4Turbor = "openai/gpt-4-turbo"
 	AuditBaseLLMGPT4o      = "openai/gpt-4o"
+	AuditBaseLLMGPT61Sol   = "openai/gpt-6.1-sol"
 
 	AUDIT_OP_UNKNOWN            = 0
 	AUDIT_OP_TERMINATE_PROCESS  = 1

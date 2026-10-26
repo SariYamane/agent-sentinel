@@ -105,7 +105,7 @@ class Agent:
                 api_response_callback=self.api_req_rep_log_func,
                 enable_third_party_output_verifier=enable_third_party_output_verifier
             )
-        elif self.model == "gpt-4-turbo" or self.model == "openai/gpt-4-turbo" or  self.model == "gpt-4o" or self.model == "openai/gpt-4o":
+        elif self.model == "gpt-4-turbo" or self.model == "openai/gpt-4-turbo" or  self.model == "gpt-4o" or self.model == "openai/gpt-4o" or self.model == "openai/gpt-6.1-sol":
             self.llm_client = GPT(
                 api_key=self.api_key,
                 model=self.model,

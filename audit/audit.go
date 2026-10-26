@@ -58,6 +58,8 @@ func NewAudit(config *Config) (*Audit, error) {
 	case AuditBaseLLMGPT4Turbor:
 		fallthrough
 	case AuditBaseLLMGPT4o:
+		fallthrough
+	case AuditBaseLLMGPT61Sol:
 		openaiClient, err := llm.NewOpenAIClient(config.SecurityQueryBaseLLM, systemPrompt)
 		if err != nil {
 			log.Error().Err(err).Msg("audit: create openai client failed")

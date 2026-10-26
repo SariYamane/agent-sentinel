@@ -68,7 +68,7 @@ func newComputerUseMonitor() (*computerUseMonitor, error) {
 		log.Debug().Msg("Debug mode enabled")
 	}
 
-	if cum.model != audit.AuditBaseLLMCladue35 && cum.model != audit.AuditBaseLLMCladue37 && cum.model != audit.AuditBaseLLMGPT4Turbor && cum.model != audit.AuditBaseLLMGPT4o {
+	if cum.model != audit.AuditBaseLLMCladue35 && cum.model != audit.AuditBaseLLMCladue37 && cum.model != audit.AuditBaseLLMGPT4Turbor && cum.model != audit.AuditBaseLLMGPT4o && cum.model != audit.AuditBaseLLMGPT61Sol {
 		log.Error().Msgf("LLM model %s is not supported", cum.model)
 		return nil, fmt.Errorf("LLM model %s is not supported", cum.model)
 	}

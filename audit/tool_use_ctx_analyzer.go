@@ -34,6 +34,8 @@ func NewToolUseCtxAnalyzer(TaskCtxSummarizingLLMType string, CustomizedTaskCtxSu
 	case AuditBaseLLMGPT4Turbor:
 		fallthrough
 	case AuditBaseLLMGPT4o:
+		fallthrough
+	case AuditBaseLLMGPT61Sol:
 		openaiClient, err := llm.NewOpenAIClient(TaskCtxSummarizingLLMType, TaskContextSummarizingSystemPrompt)
 		if err != nil {
 			log.Error().Err(err).Msg("audit: create openai client failed")
