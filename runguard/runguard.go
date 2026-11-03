@@ -107,12 +107,3 @@ func WriteStatus(status string, details map[string]any) error {
 	}
 	return os.Rename(tmp.Name(), statusFile)
 }
-
-// Reset clears all state. For tests only.
-func Reset() {
-	mu.Lock()
-	aborted = false
-	onAbort = nil
-	mu.Unlock()
-	ConfigureStatusFile("")
-}
