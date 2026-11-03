@@ -3,15 +3,20 @@ package main
 import (
 	"agent-sentinel/api"
 	"agent-sentinel/audit"
+	"agent-sentinel/audit/llm"
 	"agent-sentinel/handler"
 	"agent-sentinel/helper"
 	moniterlog "agent-sentinel/log"
+	"agent-sentinel/runguard"
 	"agent-sentinel/tracer"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"github.com/rs/zerolog/log"
+	"net/url"
 	"os"
 	"os/signal"
 	"time"
@@ -39,6 +44,38 @@ type computerUseMonitor struct {
 	toolUseTimeout           int
 	enableAuditWithoutTracer bool
 	model                    string
+	auditRequestLimit        int
+}
+
+// logLLMConfig records which endpoint and key the auditor will use, so a run
+// can be checked after the fact. Only a fingerprint of the key is logged.
+func logLLMConfig() {
+	host := ""
+	if u, err := url.Parse(os.Getenv("OPENROUTER_BASE_URL")); err == nil {
+		host = u.Host
+	}
+	sum := sha256.Sum256([]byte(os.Getenv("OPENROUTER_API_KEY")))
+	log.Info().Msgf("llm_config: base_url_host=%s key_sha256_8=%s", host, hex.EncodeToString(sum[:])[:8])
+}
+
+func (cum *computerUseMonitor) configureAuditBudget() {
+	llm.SetRequestLimit(cum.auditRequestLimit)
+	if cum.outputFile != "" {
+		runguard.ConfigureStatusFile(cum.outputFile + ".audit_budget.json")
+	}
+	log.Info().Msgf("audit_budget: request limit is %d", cum.auditRequestLimit)
+}
+
+// recordCompletedStatus goes through the abort gate so that it can never
+// overwrite the record of an abort.
+func recordCompletedStatus() {
+	_, err := runguard.DoUnlessAborted(func() error {
+		limit, used, rejected := llm.BudgetSnapshot()
+		return runguard.WriteStatus("completed", map[string]any{"limit": limit, "used": used, "rejected": rejected})
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("audit_budget: write status file failed")
+	}
 }
 
 func newComputerUseMonitor() (*computerUseMonitor, error) {
@@ -55,6 +92,7 @@ func newComputerUseMonitor() (*computerUseMonitor, error) {
 	flag.BoolVar(&cum.binaryLevelCache, "binary-level-cache", false, "enable binary level cache")
 	flag.IntVar(&cum.toolUseTimeout, "tool-use-timeout", 60, "tool use timeout (s)")
 	flag.StringVar(&cum.model, "model", audit.AuditBaseLLMCladue35, "LLM model name")
+	flag.IntVar(&cum.auditRequestLimit, "audit-request-limit", 100, "max audit LLM HTTP attempts per run (0 = unlimited)")
 	flag.Parse()
 
 	// init global monitor logger
@@ -73,6 +111,8 @@ func newComputerUseMonitor() (*computerUseMonitor, error) {
 		return nil, fmt.Errorf("LLM model %s is not supported", cum.model)
 	}
 	log.Debug().Msgf("Set LLM model %s", cum.model)
+
+	logLLMConfig()
 
 	if cum.mountPath == "" {
 		log.Error().Msg("Mount path is required")
@@ -262,6 +302,11 @@ func (cum *computerUseMonitor) Start() {
 		return
 	}
 
+	cum.configureAuditBudget()
+	if cum.auditRequestLimit > 0 && (cum.model == audit.AuditBaseLLMCladue35 || cum.model == audit.AuditBaseLLMCladue37) {
+		log.Warn().Msg("audit_budget: the Claude client is not covered by the request limit")
+	}
+
 	auditor, err := audit.NewAudit(&audit.Config{
 		SecurityQueryBaseLLM:      cum.model,
 		TaskCtxSummarizingBaseLLM: cum.model,
@@ -290,6 +335,8 @@ func (cum *computerUseMonitor) Start() {
 		handlerInstance.DisableAudit()
 	}
 
+	runguard.SetOnAbort(handlerInstance.OnRunAbort)
+
 	handlerInstance.SetTracer(cum.tracer)
 	handlerInstance.EnableDNSCache()
 
@@ -309,6 +356,7 @@ func (cum *computerUseMonitor) Start() {
 	go func() {
 		select {
 		case <-stop:
+			recordCompletedStatus()
 			server.Close()
 			handlerInstance.Close()
 			cancel()
@@ -322,6 +370,13 @@ func (cum *computerUseMonitor) Start() {
 }
 
 func (cum *computerUseMonitor) StartWithoutTracer() {
+	// This mode cannot hold stopped processes on abort, so an exceeded limit
+	// would fail open. Refuse to run with a limit instead.
+	if cum.auditRequestLimit > 0 {
+		log.Fatal().Msg("audit request limit is not supported in audit-without-tracer mode; pass -audit-request-limit=0")
+	}
+	cum.configureAuditBudget()
+
 	server, err := api.NewComputerMonitorServer(cum.mountPath)
 	if err != nil {
 		log.Error().Msg("Create computer monitor server failed")
@@ -355,6 +410,7 @@ func (cum *computerUseMonitor) StartWithoutTracer() {
 	go func() {
 		select {
 		case <-stop:
+			recordCompletedStatus()
 			server.Close()
 			handlerInstance.Close()
 			cancel()

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/rs/zerolog/log"
 	"agent-sentinel/audit/cache"
 	"agent-sentinel/audit/filters"
 	"agent-sentinel/audit/llm"
+	"agent-sentinel/runguard"
 	"agent-sentinel/tracer"
 	"strings"
 	"sync"
@@ -182,6 +184,11 @@ func (audit *Audit) Query(pid int, sensitiveOp interface{}, traceRecord map[uint
 	// TODO: support safely parallel calls
 	// audit.lock.Lock()
 
+	if runguard.Aborted() {
+		log.Debug().Msg("audit: give `abort` (run aborted)")
+		return AUDIT_OP_ABORT
+	}
+
 	// hard audit
 	if audit.agentProcessProtector != nil {
 		answer, result := audit.agentProcessProtector.Query(pid, sensitiveOp, traceRecord, toolUseMsg, newToolUseMsg)
@@ -210,6 +217,11 @@ func (audit *Audit) Query(pid int, sensitiveOp interface{}, traceRecord map[uint
 		ctx, cancel := context.WithTimeout(context.Background(), audit.optimizer.getRemainingTime(pid))
 		taskCtx, taskChanged = audit.toolUseCtxAnalyzer.SummarizeToolUseCtx(ctx, newToolUseMsg)
 		cancel()
+
+		if runguard.Aborted() {
+			log.Debug().Msg("audit: give `abort` (run aborted)")
+			return AUDIT_OP_ABORT
+		}
 	}
 
 	// clean task-level cache
@@ -279,6 +291,11 @@ func (audit *Audit) Query(pid int, sensitiveOp interface{}, traceRecord map[uint
 		cancel()
 
 		if err != nil {
+			// The ctx deadline can replace the budget error, so check both.
+			if errors.Is(err, llm.ErrRequestBudgetExceeded) || runguard.Aborted() {
+				log.Debug().Msg("audit: give `abort` (audit request budget exceeded)")
+				return AUDIT_OP_ABORT
+			}
 			answer = AUDIT_OP_RESUME_PROCESS
 		} else {
 			if ans.ActionIsSafe {

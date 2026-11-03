@@ -34,6 +34,7 @@ func NewOpenAIClient(model string, systemPrompt string) (*OpenAIClient, error) {
 		Client: openai.NewClient(
 			option.WithAPIKey(apikey),
 			option.WithBaseURL(baseURL),
+			option.WithMiddleware(BudgetMiddleware),
 		),
 		MessageHistory: []openai.ChatCompletionMessageParamUnion{},
 		SystemPrompt:   systemPrompt,

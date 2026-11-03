@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"io"
 	"agent-sentinel/api"
 	"agent-sentinel/audit"
+	"agent-sentinel/audit/llm"
 	"agent-sentinel/helper"
+	"agent-sentinel/runguard"
 	"agent-sentinel/tracer"
+	"os"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -45,6 +51,10 @@ type Handler struct {
 	// exit), so the orphan-stop watchdog knows which pids to check.
 	knownPidsMu sync.Mutex
 	knownPids   map[int]struct{}
+
+	// agent root pids for OnRunAbort, which runs on a middleware goroutine
+	abortTargetHostPid atomic.Int64
+	abortTargetNsPid   atomic.Int64
 }
 
 func NewHandler(pidNS int, auditor *audit.Audit) (*Handler, error) {
@@ -222,6 +232,8 @@ func (h *Handler) NewConnectHandler() api.ComputerMonitorMessageCallback {
 
 		h.hostRootPid = agentProcessInfo.HostPid
 		h.nsRootPid = agentProcessInfo.NSPid
+		h.abortTargetHostPid.Store(int64(agentProcessInfo.HostPid))
+		h.abortTargetNsPid.Store(int64(agentProcessInfo.NSPid))
 		h.trackKnownPid(h.hostRootPid)
 
 		err = h.audit.SetTraceInfo(h.tracer, &agentProcessInfo)
@@ -375,15 +387,67 @@ func (h *Handler) TakeDecisionByAudit(pid int, event interface{}, traceRecord ma
 	h.markInProcessing(pid)
 	defer h.clearInProcessing(pid)
 
-	if h.audit.Query(pid, event, traceRecord, toolUseCtx, newToolUseMsg) == audit.AUDIT_OP_RESUME_PROCESS {
+	applyAuditDecision(pid, h.audit.Query(pid, event, traceRecord, toolUseCtx, newToolUseMsg))
+}
+
+func applyAuditDecision(pid int, decision int) {
+	switch decision {
+	case audit.AUDIT_OP_RESUME_PROCESS:
 		if err := resumeProcessReliably(pid); err != nil {
 			log.Error().Err(err).Msg("handler: resume process failed")
 		}
-	} else {
+	case audit.AUDIT_OP_ABORT:
+		log.Debug().Msgf("handler: run aborted, leaving process %d stopped", pid)
+	default:
 		if err := terminateProcess(pid); err != nil {
 			log.Error().Err(err).Msg("handler: terminate process failed")
 		}
 	}
+}
+
+// OnRunAbort is called once when the run aborts. The status file is written
+// first because killing the agent is what makes the runner look at it.
+func (h *Handler) OnRunAbort(reason string, details map[string]any) {
+	status := map[string]any{"reason": reason}
+	for k, v := range details {
+		status[k] = v
+	}
+	limit, used, rejected := llm.BudgetSnapshot()
+	status["limit"], status["used"], status["rejected"] = limit, used, rejected
+
+	if err := runguard.WriteStatus("aborted", status); err != nil {
+		log.Error().Err(err).Msg("run_abort: write status file failed")
+	}
+	log.Error().Msgf("run_abort: reason=%s limit=%d used=%d rejected=%d", reason, limit, used, rejected)
+
+	status["agent_kill"] = h.killAbortTarget()
+	if err := runguard.WriteStatus("aborted", status); err != nil {
+		log.Error().Err(err).Msg("run_abort: write status file failed")
+	}
+}
+
+// killAbortTarget kills the agent root if it is still the process that
+// connected; a reused pid must not be killed. It returns what happened.
+func (h *Handler) killAbortTarget() string {
+	pid := int(h.abortTargetHostPid.Load())
+	result := "skipped_absent"
+
+	if pid != 0 {
+		nsPid, err := readNSpid(pid)
+		if err == nil && int64(nsPid) == h.abortTargetNsPid.Load() {
+			if err := killAgentForAbort(pid); err == nil {
+				return "sent"
+			} else if !errors.Is(err, syscall.ESRCH) {
+				log.Error().Err(err).Msgf("run_abort: SIGKILL agent root %d failed", pid)
+				return "failed"
+			}
+		} else if err == nil || !errors.Is(err, os.ErrNotExist) {
+			result = "skipped_mismatch"
+		}
+	}
+
+	log.Error().Msgf("run_abort: agent root pid mismatch/absent, skip kill (%s)", result)
+	return result
 }
 
 func (h *Handler) markInProcessing(pid int) {

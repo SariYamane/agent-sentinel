@@ -3,9 +3,12 @@ import datetime
 import json
 import os
 import subprocess
+import sys
 
 
-NORMAL = ['test', 'all', 'attack4agent', 'backdoor', 'bad_tool_result', 'hallucination', 'third_party_app', 'direct_task_inject']
+AUDIT_BUDGET_EXIT_CODE = 3
+
+NORMAL =['test', 'all', 'attack4agent', 'backdoor', 'bad_tool_result', 'hallucination', 'third_party_app', 'direct_task_inject']
 ATTACKS = ['all', 'attack4agent', 'backdoor', 'bad_tool_result', 'hallucination', 'third_party_app', 'direct_task_inject', 'adaptive_attack', 'agentdojo']
 DEFENSES = ['sandbox', 'delimiters_defense', 'instructional_prevention', 'tool_use_guard']
 
@@ -197,6 +200,7 @@ def load_config(config):
 
 def run_all_tasks(config):
     config = load_config(config)
+    finished_tasks = []
 
     # run each task
     for task_set in config["tasks"]:
@@ -238,6 +242,19 @@ def run_all_tasks(config):
             )
 
             print(outs)
+
+            if outs.returncode == AUDIT_BUDGET_EXIT_CODE:
+                aborted_file = os.path.join(config['output_dir'], "RUN_ABORTED.json")
+                with open(aborted_file, 'w') as f:
+                    json.dump({
+                        "aborted_task": task,
+                        "time": datetime.datetime.now().isoformat(),
+                        "finished_tasks": finished_tasks,
+                    }, f)
+                print(f"[!] audit request budget exceeded by `{task}`, skipping the remaining tasks")
+                sys.exit(AUDIT_BUDGET_EXIT_CODE)
+
+            finished_tasks.append(task)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Script for running a set of tasks')

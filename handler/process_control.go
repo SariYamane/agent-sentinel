@@ -1,23 +1,30 @@
 package handler
 
 import (
+	"agent-sentinel/runguard"
 	"fmt"
 	"github.com/rs/zerolog/log"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
 func resumeProcess(pid int) error {
-	err := syscall.Kill(pid, syscall.SIGCONT)
+	// logged inside the gate so that the log order matches the signal order
+	ran, err := runguard.DoUnlessAborted(func() error {
+		if err := syscall.Kill(pid, syscall.SIGCONT); err != nil {
+			return err
+		}
+		log.Debug().Msgf("handler_process_control: resume process %d", pid)
+		return nil
+	})
 
-	if err != nil {
-		return err
+	if !ran {
+		log.Debug().Msgf("abort_gate: suppressed SIGCONT pid=%d", pid)
 	}
-
-	log.Debug().Msgf("handler_process_control: resume process %d", pid)
-	return nil
+	return err
 }
 
 // readProcessState returns the state character from /proc/<pid>/stat
@@ -94,11 +101,48 @@ func resumeProcessReliably(pid int) error {
 }
 
 func terminateProcess(pid int) error {
-	err := syscall.Kill(pid, syscall.SIGKILL)
-	if err != nil {
+	ran, err := runguard.DoUnlessAborted(func() error {
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			return err
+		}
+		log.Debug().Msgf("handler_process_control: terminate process %d", pid)
+		return nil
+	})
+
+	if !ran {
+		log.Debug().Msgf("abort_gate: suppressed SIGKILL pid=%d", pid)
+	}
+	return err
+}
+
+// killAgentForAbort kills the agent root to end the run. It bypasses the abort
+// gate on purpose, and its log line differs from a defense termination.
+func killAgentForAbort(pid int) error {
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		return err
 	}
 
-	log.Debug().Msgf("handler_process_control: terminate process %d", pid)
+	log.Error().Msgf("run_abort: SIGKILL agent root %d", pid)
 	return nil
+}
+
+// readNSpid returns the innermost namespace pid from /proc/<pid>/status.
+func readNSpid(pid int) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, err
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "NSpid:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			break
+		}
+		return strconv.Atoi(fields[len(fields)-1])
+	}
+
+	return 0, fmt.Errorf("handler_process_control: no NSpid in /proc/%d/status", pid)
 }

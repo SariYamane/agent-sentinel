@@ -19,6 +19,8 @@ AGENT_IMAGE = "computer-use-demo-test"
 AGENT_USER = "computeruse"
 AGENT_LOG_FILE = "/tmp/agent_running.log"
 AGENT_TEST_FILE = "/home/computeruse/scripts/test_config.json"
+DEFAULT_ENV_FILE = "/home/arcana/experiment/agent-sentinel/.env"
+AUDIT_BUDGET_EXIT_CODE = 3
 
 # change it to absolute path
 TIMEOUT_TABLE = {
@@ -251,6 +253,9 @@ def setup_sandbox(computer_use_con, log_file, model):
     if log_file != "":
         args.append(log_file)
         args.append(model)
+        # sudo resets the environment, so these are passed as positional args
+        args.append(os.environ.get("AGENTSENTINEL_ENV_FILE", DEFAULT_ENV_FILE))
+        args.append(os.environ.get("AUDIT_REQUEST_LIMIT", "100"))
 
     proc = subprocess.Popen(
         args=args,
@@ -337,14 +342,61 @@ def run_single_task(con, test_file, stream = False, timeout = -1):
     else:
         return exitcode, output[0], output[1]
 
+def read_audit_budget(sandbox_log_file):
+    try:
+        with open(sandbox_log_file + ".audit_budget.json") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+def is_audit_budget_aborted(audit_budget):
+    return audit_budget is not None and audit_budget.get("status") == "aborted"
+
+def best_effort(func, *args):
+    try:
+        return func(*args)
+    except Exception as e:
+        print(f"[!] {getattr(func, '__name__', func)} failed during abort: {e}")
+
+def finish_aborted_run(container, basic_config, agent_log_file, sandbox_proc, tool_use_guard_proc):
+    # Keep the agent log first: the container is removed as soon as it is killed.
+    # Then kill rather than stop, since stopped processes must not get to run again.
+    best_effort(copy_from_container_to_host, container, AGENT_LOG_FILE, agent_log_file)
+    best_effort(container.kill)
+    for name in basic_config["mock_servers"]:
+        best_effort(basic_config["mock_servers"][name].stop)
+    best_effort(stop_sandbox)
+    if sandbox_proc is not None:
+        best_effort(sandbox_proc.communicate)
+    if tool_use_guard_proc is not None:
+        best_effort(stop_tool_use_guard, tool_use_guard_proc)
+
+def record_run_status(run_status_file, status, sandbox_log_file):
+    # An audit still in flight can exhaust the budget after the agent has
+    # finished, so the status file has the last word on whether this is an abort.
+    audit_budget = read_audit_budget(sandbox_log_file)
+    aborted = is_audit_budget_aborted(audit_budget)
+    if aborted:
+        status = "aborted_audit_budget"
+
+    if run_status_file != "":
+        with open(run_status_file, "w") as f:
+            json.dump({"status": status, "audit_budget": audit_budget}, f)
+
+    return AUDIT_BUDGET_EXIT_CODE if aborted else 0
+
 def run (basic_config_file, task_config_file):
     run_single_task_error_file = ""
+    run_status_file = ""
+    sandbox_log_file = ""
+    agent_log_file = ""
     basic_config_file = os.path.realpath(basic_config_file, strict=True)
     task_config_file = os.path.realpath(task_config_file, strict=True)
     container = None
     sandbox_proc = None
     tool_use_guard_proc = None
     basic_config = None
+    run_status = "error"
 
     try:
         # load config
@@ -354,6 +406,7 @@ def run (basic_config_file, task_config_file):
 
         # setup log files
         run_single_task_error_file = basic_config["output_dir"] + "/" + task_config["id"] + "_run_single_task_error.log"
+        run_status_file = basic_config["output_dir"] + "/" + task_config["id"] + "_run_status.json"
         agent_log_file = basic_config["output_dir"] + "/" + task_config["id"] + "_agent_output.log"
         agent_error_file = basic_config["output_dir"] + "/" + task_config["id"] + "_agent_error.log"
         sandbox_log_file = basic_config["output_dir"] + "/" + task_config["id"] + "_sandbox_output.log"
@@ -382,6 +435,11 @@ def run (basic_config_file, task_config_file):
             exitcode, stdout, stderr = run_single_task(container, test_file, basic_config["enable_console_log"], TIMEOUT_TABLE[task_config_file])
         else:
             exitcode, stdout, stderr = run_single_task(container, test_file, basic_config["enable_console_log"])
+
+        if is_audit_budget_aborted(read_audit_budget(sandbox_log_file)):
+            print("[!] audit request budget exceeded, aborting the run")
+            finish_aborted_run(container, basic_config, agent_log_file, sandbox_proc, tool_use_guard_proc)
+            return record_run_status(run_status_file, "aborted_audit_budget", sandbox_log_file)
 
         if stdout is not None and stdout != b"":
             print("----------agent_stdout-------------")
@@ -425,15 +483,24 @@ def run (basic_config_file, task_config_file):
         for name in basic_config["mock_servers"]:
             basic_config["mock_servers"][name].stop()
 
+        run_status = "completed"
+
     except Exception as e:
-        if container is not None:
-            container.stop()
-        if basic_config is not None and "mock_servers" in basic_config:
-            for name in basic_config["mock_servers"]:
-                basic_config["mock_servers"][name].stop()
-        stop_sandbox()
-        if tool_use_guard_proc is not None:
-            stop_tool_use_guard(tool_use_guard_proc)
+        aborted = is_audit_budget_aborted(read_audit_budget(sandbox_log_file))
+        if aborted:
+            finish_aborted_run(container, basic_config, agent_log_file, sandbox_proc, tool_use_guard_proc)
+        else:
+            if container is not None:
+                container.stop()
+            if basic_config is not None and "mock_servers" in basic_config:
+                for name in basic_config["mock_servers"]:
+                    basic_config["mock_servers"][name].stop()
+            stop_sandbox()
+            # the completed record is written on SIGINT, so wait for it
+            if sandbox_proc is not None:
+                sandbox_proc.communicate()
+            if tool_use_guard_proc is not None:
+                stop_tool_use_guard(tool_use_guard_proc)
 
         print("----------run_single_task_exception-------------")
         print(str(e))
@@ -444,8 +511,10 @@ def run (basic_config_file, task_config_file):
                 f.write(str(e))
                 f.write(traceback.format_exc())
 
+    return record_run_status(run_status_file, run_status, sandbox_log_file)
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         sys.exit("Please input config files. i.e., python run_single_tast.py basic.json task.json")
 
-    run(sys.argv[1], sys.argv[2])
+    sys.exit(run(sys.argv[1], sys.argv[2]))
