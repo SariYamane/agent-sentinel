@@ -3,7 +3,6 @@ import datetime
 import json
 import os
 import subprocess
-import sys
 
 
 AUDIT_BUDGET_EXIT_CODE = 3
@@ -200,7 +199,7 @@ def load_config(config):
 
 def run_all_tasks(config):
     config = load_config(config)
-    finished_tasks = []
+    aborted_tasks = []
 
     # run each task
     for task_set in config["tasks"]:
@@ -243,18 +242,13 @@ def run_all_tasks(config):
 
             print(outs)
 
+            # This task is not evaluable, but the others still are. Its process and
+            # container are already gone: run_single_task.py waits for them to exit.
             if outs.returncode == AUDIT_BUDGET_EXIT_CODE:
-                aborted_file = os.path.join(config['output_dir'], "RUN_ABORTED.json")
-                with open(aborted_file, 'w') as f:
-                    json.dump({
-                        "aborted_task": task,
-                        "time": datetime.datetime.now().isoformat(),
-                        "finished_tasks": finished_tasks,
-                    }, f)
-                print(f"[!] audit request budget exceeded by `{task}`, skipping the remaining tasks")
-                sys.exit(AUDIT_BUDGET_EXIT_CODE)
-
-            finished_tasks.append(task)
+                aborted_tasks.append({"task": task, "time": datetime.datetime.now().isoformat()})
+                with open(os.path.join(config['output_dir'], "AUDIT_BUDGET_ABORTED.json"), 'w') as f:
+                    json.dump(aborted_tasks, f)
+                print(f"[!] audit request budget exceeded by `{task}`, continuing with the next task")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Script for running a set of tasks')
